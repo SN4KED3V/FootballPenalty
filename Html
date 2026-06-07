@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>⚽ Football Penalty Shootout</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div id="wrapper">
+  <div id="hud">
+    <div class="stat-box">
+      <span class="stat-label">Goals</span>
+      <span class="stat-value" id="goalsVal">0</span>
+    </div>
+    <div class="hud-divider"></div>
+    <div class="stat-box">
+      <span class="stat-label">Shots</span>
+      <span class="stat-value" id="shotsVal">0</span>
+    </div>
+    <div class="hud-divider"></div>
+    <div class="stat-box">
+      <span class="stat-label">Best</span>
+      <span class="stat-value" id="bestVal">0</span>
+    </div>
+    <div class="hud-divider"></div>
+    <button id="restartBtn">↺ New Game</button>
+  </div>
+
+  <canvas id="gameCanvas" width="700" height="430"></canvas>
+
+  <div id="powerWrap">
+    <span id="powerLabel">Power</span>
+    <div id="powerTrack"><div id="powerFill"></div></div>
+    <span id="powerPct">0%</span>
+  </div>
+
+  <div id="hint">Move mouse to aim &nbsp;·&nbsp; Hold to charge &nbsp;·&nbsp; Release to shoot</div>
+</div>
+
+<script src="game.js"></script>
+</body>
+</html>
