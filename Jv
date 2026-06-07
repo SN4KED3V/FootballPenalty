@@ -1,0 +1,599 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// Canvas setup
+// ─────────────────────────────────────────────────────────────────────────────
+const canvas = document.getElementById('gameCanvas');
+const ctx    = canvas.getContext('2d');
+const W = canvas.width, H = canvas.height;
+
+// HUD elements
+const goalsEl   = document.getElementById('goalsVal');
+const shotsEl   = document.getElementById('shotsVal');
+const bestEl    = document.getElementById('bestVal');
+const powerFill = document.getElementById('powerFill');
+const powerPct  = document.getElementById('powerPct');
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Game constants
+// ─────────────────────────────────────────────────────────────────────────────
+const GP = { cx: W/2, cy: 100, w: 240, h: 120, postW: 9, crossH: 9 };
+const BALL_START = { x: W/2, y: H - 55 };
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Game state
+// ─────────────────────────────────────────────────────────────────────────────
+let score = 0, shots = 0, best = 0;
+let phase = 'idle'; // idle | charging | flying | result
+let power = 0, chargeStart = 0;
+let ball  = null;
+let mouseX = W / 2;
+let gkX = W / 2, gkDir = 1, gkSpd = 1.4;
+let resultMsg = '', resultTimer = 0;
+let particles = [];
+let resultColor = '#fff';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Particles
+// ─────────────────────────────────────────────────────────────────────────────
+function spawnParticles(x, y, color, n = 28) {
+  for (let i = 0; i < n; i++) {
+    const ang = Math.random() * Math.PI * 2;
+    const spd = 2 + Math.random() * 6;
+    particles.push({
+      x, y,
+      vx: Math.cos(ang) * spd,
+      vy: Math.sin(ang) * spd - 3,
+      life: 1.0,
+      color
+    });
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DRAW FIELD
+// ─────────────────────────────────────────────────────────────────────────────
+function drawField() {
+  // Sky gradient
+  const sky = ctx.createLinearGradient(0, 0, 0, H * 0.45);
+  sky.addColorStop(0, '#0d5fa0');
+  sky.addColorStop(1, '#4ea8e0');
+  ctx.fillStyle = sky;
+  ctx.fillRect(0, 0, W, H * 0.45);
+
+  // Stadium stand
+  const stand = ctx.createLinearGradient(0, H * 0.14, 0, H * 0.42);
+  stand.addColorStop(0, '#7a5535');
+  stand.addColorStop(1, '#4a2e12');
+  ctx.fillStyle = stand;
+  ctx.fillRect(0, H * 0.18, W, H * 0.26);
+
+  // Stand rows
+  for (let row = 0; row < 5; row++) {
+    ctx.fillStyle = `rgba(0,0,0,${0.04 + row * 0.02})`;
+    ctx.fillRect(0, H * 0.19 + row * (H * 0.045), W, H * 0.022);
+  }
+
+  // Crowd
+  const crowdCols = ['#e74c3c','#3498db','#f1c40f','#9b59b6','#e67e22','#1abc9c','#e91e63','#00bcd4'];
+  const seed = (n) => ((n * 1664525 + 1013904223) & 0xffffffff) / 0xffffffff;
+  for (let i = 0; i < 110; i++) {
+    const cx2 = 8 + i * 6.3;
+    const cy2 = H * 0.205 + seed(i * 3) * H * 0.17;
+    const r   = 3.5 + seed(i * 7) * 2;
+    ctx.beginPath();
+    ctx.arc(cx2, cy2, r, 0, Math.PI * 2);
+    ctx.fillStyle = crowdCols[i % crowdCols.length];
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(cx2, cy2 - r * 1.1, r * 0.7, 0, Math.PI * 2);
+    ctx.fillStyle = '#f8d3aa';
+    ctx.fill();
+  }
+
+  // Pitch stripes
+  for (let i = 0; i < 9; i++) {
+    const sw = W / 9;
+    ctx.fillStyle = i % 2 === 0 ? '#1d8c3a' : '#196e2e';
+    ctx.fillRect(i * sw, H * 0.42, sw, H * 0.58);
+  }
+
+  // Pitch markings
+  ctx.strokeStyle = 'rgba(255,255,255,0.32)';
+  ctx.lineWidth   = 1.5;
+
+  // Penalty box
+  const pby = GP.cy + GP.h / 2 + 2;
+  ctx.strokeRect(W / 2 - 150, pby, 300, 130);
+
+  // 6-yard box
+  ctx.strokeRect(W / 2 - 75, pby, 150, 55);
+
+  // Penalty spot
+  ctx.beginPath();
+  ctx.arc(W / 2, H - 55, 5, 0, Math.PI * 2);
+  ctx.fillStyle = 'rgba(255,255,255,0.55)';
+  ctx.fill();
+
+  // Penalty arc
+  ctx.beginPath();
+  ctx.arc(W / 2, H - 55, 55, Math.PI * 1.1, Math.PI * 1.9);
+  ctx.strokeStyle = 'rgba(255,255,255,0.22)';
+  ctx.stroke();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DRAW GOALPOST
+// ─────────────────────────────────────────────────────────────────────────────
+function drawGoal() {
+  const { cx, cy, w, h, postW, crossH } = GP;
+  const lx  = cx - w / 2, rx = cx + w / 2;
+  const top = cy - h / 2, bot = cy + h / 2;
+
+  // Net shadow
+  ctx.fillStyle = 'rgba(0,0,0,0.18)';
+  ctx.fillRect(lx + 4, top + crossH + 4, w - postW, h - crossH);
+
+  // Net grid
+  ctx.strokeStyle = 'rgba(255,255,255,0.18)';
+  ctx.lineWidth = 0.8;
+  for (let x = lx; x <= rx; x += 18) {
+    ctx.beginPath(); ctx.moveTo(x, top + crossH); ctx.lineTo(x, bot); ctx.stroke();
+  }
+  for (let y = top + crossH; y <= bot; y += 16) {
+    ctx.beginPath(); ctx.moveTo(lx, y); ctx.lineTo(rx, y); ctx.stroke();
+  }
+
+  // Post gradient
+  const pg = ctx.createLinearGradient(lx, 0, lx + postW * 2, 0);
+  pg.addColorStop(0,   '#ffffff');
+  pg.addColorStop(0.5, '#e0e0e0');
+  pg.addColorStop(1,   '#aaaaaa');
+  ctx.fillStyle = pg;
+
+  ctx.fillRect(lx - postW / 2, top, postW, h + crossH); // left post
+  ctx.fillRect(rx - postW / 2, top, postW, h + crossH); // right post
+  ctx.fillRect(lx - postW / 2, top, w + postW, crossH); // crossbar
+
+  // Post outlines
+  ctx.strokeStyle = 'rgba(0,0,0,0.15)';
+  ctx.lineWidth = 0.5;
+  ctx.strokeRect(lx - postW / 2, top, postW, h + crossH);
+  ctx.strokeRect(rx - postW / 2, top, postW, h + crossH);
+  ctx.strokeRect(lx - postW / 2, top, w + postW, crossH);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DRAW GOALKEEPER
+// ─────────────────────────────────────────────────────────────────────────────
+function drawGK() {
+  const gx = gkX;
+  const gy = GP.cy + GP.h / 2 - 5;
+  const bh = GP.h - 14;
+
+  // Shadow
+  ctx.save();
+  ctx.scale(1, 0.25);
+  ctx.beginPath();
+  ctx.ellipse(gx, (gy + 6) / 0.25, 18, 8, 0, 0, Math.PI * 2);
+  ctx.fillStyle = 'rgba(0,0,0,0.22)';
+  ctx.fill();
+  ctx.restore();
+
+  // Boots
+  ctx.fillStyle = '#1a0a00';
+  ctx.fillRect(gx - 14, gy - 8, 12, 9);
+  ctx.fillRect(gx + 2,  gy - 8, 12, 9);
+
+  // Socks
+  ctx.fillStyle = '#eeeeee';
+  ctx.fillRect(gx - 13, gy - 18, 10, 12);
+  ctx.fillRect(gx + 3,  gy - 18, 10, 12);
+
+  // Shorts
+  ctx.fillStyle = '#1a1a2e';
+  ctx.fillRect(gx - 15, gy - bh * 0.38, 13, bh * 0.22);
+  ctx.fillRect(gx + 2,  gy - bh * 0.38, 13, bh * 0.22);
+
+  // Jersey
+  const jg = ctx.createLinearGradient(gx - 16, 0, gx + 16, 0);
+  jg.addColorStop(0,   '#e6b010');
+  jg.addColorStop(0.5, '#f4c020');
+  jg.addColorStop(1,   '#e6b010');
+  ctx.fillStyle = jg;
+  ctx.beginPath();
+  ctx.roundRect(gx - 16, gy - bh * 0.75, 32, bh * 0.42, 4);
+  ctx.fill();
+
+  // Jersey number
+  ctx.fillStyle = '#1a1a2e';
+  ctx.font = 'bold 11px Arial';
+  ctx.textAlign = 'center';
+  ctx.fillText('1', gx, gy - bh * 0.43);
+
+  // Gloves
+  ctx.fillStyle = '#e74c3c';
+  ctx.beginPath(); ctx.roundRect(gx - 24, gy - bh * 0.68, 10, 18, 3); ctx.fill();
+  ctx.beginPath(); ctx.roundRect(gx + 14, gy - bh * 0.68, 10, 18, 3); ctx.fill();
+
+  // Neck
+  ctx.fillStyle = '#f8c8a0';
+  ctx.fillRect(gx - 5, gy - bh * 0.80, 10, 10);
+
+  // Head
+  const hg = ctx.createRadialGradient(gx - 3, gy - bh * 0.93, 2, gx, gy - bh * 0.91, 15);
+  hg.addColorStop(0, '#fde0c0');
+  hg.addColorStop(1, '#f0b888');
+  ctx.beginPath();
+  ctx.arc(gx, gy - bh * 0.91, 14, 0, Math.PI * 2);
+  ctx.fillStyle = hg;
+  ctx.fill();
+
+  // Hair
+  ctx.beginPath();
+  ctx.ellipse(gx, gy - bh * 0.97, 13, 9, 0, Math.PI, 0);
+  ctx.fillStyle = '#3b2000';
+  ctx.fill();
+
+  // Eyes
+  ctx.fillStyle = '#1a0a00';
+  ctx.beginPath(); ctx.arc(gx - 5, gy - bh * 0.90, 2.2, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.arc(gx + 5, gy - bh * 0.90, 2.2, 0, Math.PI * 2); ctx.fill();
+
+  // Eye shine
+  ctx.fillStyle = 'white';
+  ctx.beginPath(); ctx.arc(gx - 4.2, gy - bh * 0.915, 0.9, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.arc(gx + 5.8, gy - bh * 0.915, 0.9, 0, Math.PI * 2); ctx.fill();
+
+  // Mouth
+  ctx.strokeStyle = '#a06040';
+  ctx.lineWidth = 1.2;
+  ctx.beginPath();
+  ctx.arc(gx, gy - bh * 0.865, 4.5, 0.2, Math.PI - 0.2);
+  ctx.stroke();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DRAW BALL
+// ─────────────────────────────────────────────────────────────────────────────
+function drawBall(bx, by, scale) {
+  const r = Math.max(4, 14 * scale);
+
+  // Drop shadow
+  ctx.save();
+  ctx.scale(1, 0.3);
+  ctx.beginPath();
+  ctx.arc(bx, (by + r * 1.5) / 0.3, r * 1.1, 0, Math.PI * 2);
+  ctx.fillStyle = 'rgba(0,0,0,0.25)';
+  ctx.fill();
+  ctx.restore();
+
+  // Ball base
+  const bg2 = ctx.createRadialGradient(bx - r * 0.3, by - r * 0.3, r * 0.05, bx, by, r);
+  bg2.addColorStop(0,   '#ffffff');
+  bg2.addColorStop(0.6, '#f0f0f0');
+  bg2.addColorStop(1,   '#bbbbbb');
+  ctx.beginPath();
+  ctx.arc(bx, by, r, 0, Math.PI * 2);
+  ctx.fillStyle = bg2;
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(0,0,0,0.12)';
+  ctx.lineWidth = 0.5;
+  ctx.stroke();
+
+  // Pentagon patches
+  ctx.strokeStyle = '#222';
+  ctx.lineWidth = r * 0.07;
+  for (let i = 0; i < 6; i++) {
+    const a  = (i / 6) * Math.PI * 2;
+    const px = bx + Math.cos(a) * r * 0.48;
+    const py = by + Math.sin(a) * r * 0.48;
+    ctx.beginPath();
+    for (let j = 0; j <= 5; j++) {
+      const ba = a + (j / 5) * Math.PI * 2 - Math.PI / 2;
+      const vx = px + Math.cos(ba) * r * 0.28;
+      const vy = py + Math.sin(ba) * r * 0.28;
+      j === 0 ? ctx.moveTo(vx, vy) : ctx.lineTo(vx, vy);
+    }
+    ctx.closePath();
+    ctx.stroke();
+  }
+
+  // Centre patch
+  ctx.beginPath();
+  for (let j = 0; j <= 5; j++) {
+    const ba = (j / 5) * Math.PI * 2 - Math.PI / 2;
+    const vx = bx + Math.cos(ba) * r * 0.28;
+    const vy = by + Math.sin(ba) * r * 0.28;
+    j === 0 ? ctx.moveTo(vx, vy) : ctx.lineTo(vx, vy);
+  }
+  ctx.closePath();
+  ctx.stroke();
+
+  // Shine
+  ctx.beginPath();
+  ctx.arc(bx - r * 0.3, by - r * 0.3, r * 0.22, 0, Math.PI * 2);
+  ctx.fillStyle = 'rgba(255,255,255,0.55)';
+  ctx.fill();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DRAW AIM LINE
+// ─────────────────────────────────────────────────────────────────────────────
+function drawAim() {
+  if (phase !== 'idle') return;
+  const bx = BALL_START.x, by = BALL_START.y;
+  const dx = mouseX - bx;
+  const dy = GP.cy - by;
+  const len = Math.sqrt(dx * dx + dy * dy) || 1;
+  const nx = dx / len, ny = dy / len;
+  const lineLen = 90;
+
+  ctx.save();
+  ctx.setLineDash([9, 7]);
+  ctx.strokeStyle = 'rgba(255,255,255,0.55)';
+  ctx.lineWidth = 2.5;
+  ctx.beginPath();
+  ctx.moveTo(bx, by);
+  ctx.lineTo(bx + nx * lineLen, by + ny * lineLen);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // Arrowhead
+  const tx = bx + nx * lineLen, ty = by + ny * lineLen;
+  const px = -ny, py = nx;
+  ctx.fillStyle = 'rgba(255,255,255,0.7)';
+  ctx.beginPath();
+  ctx.moveTo(tx, ty);
+  ctx.lineTo(tx - nx * 14 + px * 7, ty - ny * 14 + py * 7);
+  ctx.lineTo(tx - nx * 14 - px * 7, ty - ny * 14 - py * 7);
+  ctx.closePath();
+  ctx.fill();
+  ctx.restore();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DRAW PARTICLES
+// ─────────────────────────────────────────────────────────────────────────────
+function drawParticles() {
+  for (const p of particles) {
+    ctx.globalAlpha = p.life;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, 5 * p.life, 0, Math.PI * 2);
+    ctx.fillStyle = p.color;
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DRAW RESULT MESSAGE
+// ─────────────────────────────────────────────────────────────────────────────
+function drawMessage() {
+  if (!resultMsg) return;
+  const alpha = Math.min(1, resultTimer / 20);
+  ctx.save();
+  ctx.globalAlpha = alpha;
+
+  ctx.fillStyle = 'rgba(0,0,0,0.45)';
+  ctx.beginPath();
+  ctx.roundRect(W / 2 - 180, H / 2 - 40, 360, 70, 14);
+  ctx.fill();
+
+  ctx.textAlign    = 'center';
+  ctx.textBaseline = 'middle';
+
+  ctx.fillStyle = 'rgba(0,0,0,0.5)';
+  ctx.font = 'bold 38px "Segoe UI", Arial';
+  ctx.fillText(resultMsg, W / 2 + 2, H / 2 + 2);
+
+  ctx.fillStyle = resultColor;
+  ctx.fillText(resultMsg, W / 2, H / 2);
+  ctx.restore();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GAME LOGIC
+// ─────────────────────────────────────────────────────────────────────────────
+function endShot(msg, color) {
+  phase       = 'result';
+  resultMsg   = msg;
+  resultColor = color;
+  resultTimer = 100;
+  shots++;
+  shotsEl.textContent = shots;
+  spawnParticles(ball ? ball.x : W / 2, ball ? ball.y : H / 2, color);
+}
+
+function doShoot() {
+  if (phase !== 'idle' && phase !== 'charging') return;
+  const bx = BALL_START.x, by = BALL_START.y;
+  const dx = mouseX - bx;
+  const dy = (GP.cy - 10) - by;
+  const len = Math.sqrt(dx * dx + dy * dy) || 1;
+  const nx = dx / len, ny = dy / len;
+  const spd = 7 + power * 13;
+
+  ball  = { x: bx, y: by, vx: nx * spd, vy: ny * spd, t: 0 };
+  phase = 'flying';
+  power = 0;
+  powerFill.style.width = '0%';
+  powerPct.textContent  = '0%';
+
+  // GK dive
+  if (Math.random() < 0.55) {
+    gkDir = mouseX > W / 2 ? 1 : -1;
+    gkSpd = 5 + Math.random() * 2;
+  }
+}
+
+function update(dt) {
+  // GK movement
+  if (phase === 'idle' || phase === 'flying' || phase === 'result') {
+    gkX += gkDir * gkSpd * dt;
+    const lb = GP.cx - GP.w / 2 + 22;
+    const rb = GP.cx + GP.w / 2 - 22;
+    if (gkX < lb) { gkX = lb; gkDir =  1; }
+    if (gkX > rb) { gkX = rb; gkDir = -1; }
+    if (Math.random() < 0.004) gkDir *= -1;
+  }
+
+  // Power charge
+  if (phase === 'charging') {
+    power = Math.min((Date.now() - chargeStart) / 900, 1.0);
+    const pct = Math.round(power * 100);
+    powerFill.style.width      = pct + '%';
+    powerFill.style.background = power < 0.4 ? '#27c98a' : power < 0.75 ? '#f4c020' : '#e74c3c';
+    powerPct.textContent       = pct + '%';
+    if (power >= 1.0) doShoot();
+  }
+
+  // Ball physics
+  if (phase === 'flying' && ball) {
+    ball.x  += ball.vx * dt;
+    ball.y  += ball.vy * dt;
+    ball.vy += 0.22 * dt;
+    ball.vx *= 0.996;
+    ball.t  += dt;
+    ball.scale = Math.max(0.28, Math.min(0.5 + 0.5 * (ball.t / 55), 1.0));
+
+    const bx = ball.x, by = ball.y;
+    const lx = GP.cx - GP.w / 2, rx = GP.cx + GP.w / 2;
+    const top = GP.cy - GP.h / 2, bot = GP.cy + GP.h / 2;
+
+    const inGoal = bx > lx + 10 && bx < rx - 10 && by > top + GP.crossH && by < bot;
+    const gkL = gkX - 18, gkR = gkX + 18;
+    const gkT = bot - GP.h + 8, gkBot = bot;
+    const hitGK = bx > gkL && bx < gkR && by > gkT && by < gkBot;
+
+    if (ball.t > 7) {
+      if (hitGK) {
+        endShot('SAVED! 🧤', '#f4c020');
+      } else if (inGoal) {
+        score++;
+        if (score > best) { best = score; bestEl.textContent = best; }
+        goalsEl.textContent = score;
+        endShot('GOAL! ⚽', '#27c98a');
+        spawnParticles(bx, by, '#f4c020', 20);
+      } else if (by > bot + 40 || by < top - 60 || bx < -40 || bx > W + 40) {
+        endShot('WIDE! 😬', '#e74c3c');
+      }
+    }
+  }
+
+  // Result countdown
+  if (phase === 'result') {
+    resultTimer -= dt;
+    if (resultTimer <= 0) {
+      phase      = 'idle';
+      resultMsg  = '';
+      ball       = null;
+      gkSpd      = 1.4;
+    }
+  }
+
+  // Particles
+  for (const p of particles) {
+    p.x  += p.vx * dt;
+    p.y  += p.vy * dt;
+    p.vy += 0.18 * dt;
+    p.life -= 0.022 * dt;
+  }
+  particles = particles.filter(p => p.life > 0);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MAIN LOOP
+// ─────────────────────────────────────────────────────────────────────────────
+let lastTs = 0;
+function loop(ts) {
+  const dt = Math.min((ts - lastTs) / 16.67, 3);
+  lastTs = ts;
+
+  ctx.clearRect(0, 0, W, H);
+
+  update(dt);
+  drawField();
+  drawGoal();
+  drawParticles();
+  drawGK();
+  drawAim();
+
+  if (ball && (phase === 'flying' || phase === 'result')) {
+    drawBall(ball.x, ball.y, ball.scale || 1);
+  } else if (phase === 'idle' || phase === 'charging') {
+    drawBall(BALL_START.x, BALL_START.y, 1);
+  }
+
+  drawMessage();
+  requestAnimationFrame(loop);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// INPUT
+// ─────────────────────────────────────────────────────────────────────────────
+function getCanvasX(e) {
+  const rect   = canvas.getBoundingClientRect();
+  const scaleX = W / rect.width;
+  const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+  return (clientX - rect.left) * scaleX;
+}
+
+canvas.addEventListener('mousemove', e => {
+  mouseX = getCanvasX(e);
+});
+
+canvas.addEventListener('mousedown', e => {
+  if (phase !== 'idle') return;
+  mouseX      = getCanvasX(e);
+  phase       = 'charging';
+  chargeStart = Date.now();
+  power       = 0;
+});
+
+canvas.addEventListener('mouseup', () => {
+  if (phase === 'charging') doShoot();
+});
+
+canvas.addEventListener('mouseleave', () => {
+  if (phase === 'charging') doShoot();
+});
+
+canvas.addEventListener('touchstart', e => {
+  e.preventDefault();
+  if (phase !== 'idle') return;
+  mouseX      = getCanvasX(e);
+  phase       = 'charging';
+  chargeStart = Date.now();
+  power       = 0;
+}, { passive: false });
+
+canvas.addEventListener('touchmove', e => {
+  e.preventDefault();
+  mouseX = getCanvasX(e);
+}, { passive: false });
+
+canvas.addEventListener('touchend', e => {
+  e.preventDefault();
+  if (phase === 'charging') doShoot();
+}, { passive: false });
+
+document.getElementById('restartBtn').addEventListener('click', () => {
+  score = 0; shots = 0; best = 0;
+  goalsEl.textContent = '0';
+  shotsEl.textContent = '0';
+  bestEl.textContent  = '0';
+  phase     = 'idle';
+  ball      = null;
+  resultMsg = '';
+  particles = [];
+  power     = 0;
+  gkX       = GP.cx;
+  gkSpd     = 1.4;
+  powerFill.style.width = '0%';
+  powerPct.textContent  = '0%';
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// START
+// ─────────────────────────────────────────────────────────────────────────────
+gkX = GP.cx;
+requestAnimationFrame(loop);
